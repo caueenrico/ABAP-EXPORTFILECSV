@@ -1,0 +1,132 @@
+*&---------------------------------------------------------------------*
+*& Report ZFII001_02
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT ZFII001_02.
+
+* Declaração de tabelas
+TABLES: bkpf, bseg.
+
+* Estrutura para armazenar os dados
+TYPES: BEGIN OF linha_dados,
+         empresa        TYPE bkpf-bukrs,
+         ano            TYPE bkpf-gjahr,
+         nr_documento   TYPE bkpf-belnr,
+         data_lancamento TYPE bkpf-budat,
+         moeda          TYPE bkpf-waers,
+         nr_item        TYPE bseg-buzei,
+         conta_contabil TYPE bseg-hkont,
+         debito_credito TYPE bseg-shkzg,
+         valor          TYPE bseg-dmbtr,
+       END OF linha_dados.
+
+* Declaração de tabela interna e work area
+DATA: tabela_dados TYPE TABLE OF linha_dados,
+      l_file type string,
+      wa_dados TYPE linha_dados.
+
+* Parâmetros para seleção de dados
+PARAMETERS: p_mpresa TYPE bkpf-bukrs,
+            p_ifname type string.
+            "p_ano TYPE bkpf-gjahr.
+
+at selection-screen on value-request for p_ifname.
+
+  " Solicitar o caminho do arquivo ao usuário
+** call function 'F4_FILENAME'
+*       exporting
+*            program_name  = syst-cprog
+*            dynpro_number = syst-dynnr
+*       importing
+*            file_name     = p_ifname.
+*
+*  IF  p_ifname IS INITIAL.
+*    WRITE: / 'Exportação cancelada pelo usuário.'.
+*    RETURN.
+*  ENDIF.
+
+CALL METHOD cl_gui_frontend_services=>directory_browse
+*     EXPORTING
+*       WINDOW_TITLE        =
+*      INITIAL_FOLDER       =
+    CHANGING
+      selected_folder      = l_file
+    EXCEPTIONS
+      cntl_error           = 1
+      error_no_gui         = 2
+      not_supported_by_gui = 3
+      OTHERS               = 4.
+
+  p_ifname = l_file .
+  CONCATENATE p_ifname '\' sy-datum sy-timlo '.csv' INTO p_ifname.
+
+START-OF-SELECTION.
+
+  " Obter os dados das tabelas BKPF e BSEG
+  SELECT bkpf~bukrs AS empresa,
+         bkpf~gjahr AS ano,
+         bkpf~belnr AS nr_documento,
+         bkpf~budat AS data_lancamento,
+         bkpf~waers AS moeda,
+         bseg~buzei AS nr_item,
+         bseg~hkont AS conta_contabil,
+         bseg~shkzg AS debito_credito,
+         bseg~dmbtr AS valor
+    INTO TABLE @tabela_dados
+    FROM bkpf
+    INNER JOIN bseg
+    ON bkpf~bukrs = bseg~bukrs
+   AND bkpf~gjahr = bseg~gjahr
+   AND bkpf~belnr = bseg~belnr
+   WHERE bkpf~bukrs = @p_mpresa.
+     "AND bkpf~gjahr = @p_ano.
+
+  IF tabela_dados IS INITIAL.
+    WRITE: / 'Nenhum dado encontrado para os parâmetros informados.'.
+    RETURN.
+  ENDIF.
+
+  " Exportar os dados para CSV
+  PERFORM exportar_csv.
+
+*---------------------------------------------------------------------*
+* Form: exportar_csv                                                  *
+*---------------------------------------------------------------------*
+FORM exportar_csv.
+
+  DATA: tabela_csv TYPE TABLE OF string,
+        linha_csv TYPE string,
+        valor_text TYPE char20. " Variável intermediária do tipo caracter
+
+  " Loop nos dados para criar o CSV
+  LOOP AT tabela_dados INTO wa_dados.
+
+    " Converter o campo numérico para string
+    WRITE wa_dados-valor TO valor_text.
+
+    CONCATENATE wa_dados-empresa wa_dados-ano wa_dados-nr_documento
+                wa_dados-data_lancamento wa_dados-moeda
+                wa_dados-nr_item wa_dados-conta_contabil
+                wa_dados-debito_credito valor_text
+                INTO linha_csv SEPARATED BY ';'.
+    APPEND linha_csv TO tabela_csv.
+  ENDLOOP.
+
+
+  " Gerar o arquivo CSV no local indicado
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename              =  p_ifname
+    TABLES
+      data_tab              = tabela_csv
+    EXCEPTIONS
+      others                = 1.
+
+  IF sy-subrc = 0.
+    WRITE: / 'Arquivo exportado com sucesso para:',  p_ifname.
+  ELSE.
+    WRITE: / 'Erro ao exportar o arquivo.'.
+  ENDIF.
+
+ENDFORM.
